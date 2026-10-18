@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY video_server.py .
-COPY static/ ./static/
+COPY index.html ./static/index.html
 
 # Copy database if exists (optional)
 COPY ulumed_uyeler.db* ./ 2>/dev/null || true
