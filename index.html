@@ -200,9 +200,9 @@
 
         <div id="joinForm" class="join-form">
             <h2>Görüşmeye Katıl</h2>
-            <input type="text" id="phone" placeholder="Telefon Numaranız (05XXXXXXXXX)" />
+            <input type="text" id="username" placeholder="Adınız Soyadınız" />
             <input type="text" id="roomCode" placeholder="Oda Kodu" />
-            <button onclick="validateAndJoin()">Katıl</button>
+            <button onclick="joinRoom()">Katıl</button>
         </div>
 
         <div id="videoContainer" class="video-container">
@@ -231,7 +231,6 @@
         let peerConnections = {};
         let ws;
         let username;
-        let userId;
         let roomCode;
         let isMuted = false;
         let isCameraOff = false;
@@ -255,40 +254,15 @@
             }
         };
 
-        async function validateAndJoin() {
-            const phone = document.getElementById('phone').value.trim();
+        async function joinRoom() {
+            username = document.getElementById('username').value.trim();
             roomCode = document.getElementById('roomCode').value.trim();
 
-            if (!phone || !roomCode) {
-                showError('Lütfen telefon numaranızı ve oda kodunu girin');
+            if (!username || !roomCode) {
+                showError('Lütfen adınızı ve oda kodunu girin');
                 return;
             }
 
-            // Üye doğrulama
-            try {
-                const response = await fetch('/api/uye-dogrula', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ telefon: phone })
-                });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    username = result.ad_soyad;
-                    userId = result.uye_id;
-                    joinRoom();
-                } else {
-                    showError(result.error || 'Üye doğrulaması başarısız');
-                }
-            } catch (err) {
-                showError('Doğrulama hatası: ' + err.message);
-            }
-        }
-
-        async function joinRoom() {
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({
                     video: true,
@@ -309,7 +283,7 @@
 
         function connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${window.location.host}/ws/${roomCode}?uye_id=${userId}&uye_adi=${encodeURIComponent(username)}`);
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws/${roomCode}?uye_adi=${encodeURIComponent(username)}`);
 
             ws.onopen = function() {
                 ws.send(JSON.stringify({
