@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: ulumed-video-server
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python video_server.py
+    envVars:
+      - key: PORT
+        value: 8080
+    healthCheckPath: /
+    autoDeploy: true
