@@ -1,29 +1,33 @@
-async def oda_olustur(self, request):
+async def websocket_handler(self, request):
+    oda_kodu = request.match_info.get('oda_kodu')
+    uye_adi = request.query.get('uye_adi')
+
+    if not uye_adi:
+        return web.Response(status=400, text="Ad gerekli")
+
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+
+    if oda_kodu not in self.oda_kullanicilari:
+        self.oda_kullanicilari[oda_kodu] = []
+
+    ws.kullanici_id = uye_adi
+    self.oda_kullanicilari[oda_kodu].append(ws)
+    await self.kullanici_listesi_gonder(oda_kodu)
+
     try:
-        data = await request.json()
-        oda_adi = data.get('oda_adi', 'Görüşme Odası')
-        olusturan = data.get('olusturan', 'Yönetici')
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT:
+                data = json.loads(msg.data)
+                await self.mesaj_ilet(oda_kodu, ws, data)
+            elif msg.type == WSMsgType.ERROR:
+                print(f'WebSocket error: {ws.exception()}')
+    finally:
+        if ws in self.oda_kullanicilari[oda_kodu]:
+            self.oda_kullanicilari[oda_kodu].remove(ws)
+        await self.kullanici_listesi_gonder(oda_kodu)
 
-        oda_kodu = self.oda_kodu_uret()
+        if not self.oda_kullanicilari[oda_kodu]:
+            del self.oda_kullanicilari[oda_kodu]
 
-        conn = sqlite3.connect(VERITABANI_YOLU)
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO odalar (oda_adi, oda_kodu, olusturan, olusturma_zamani) VALUES (?, ?, ?, ?)",
-            (oda_adi, oda_kodu, olusturan, datetime.now().isoformat())
-        )
-        conn.commit()
-        conn.close()
-
-        # Request'ten host URL'ini al
-        host = request.host
-        scheme = request.scheme
-        oda_linki = f'{scheme}://{host}?oda={oda_kodu}'
-
-        return web.json_response({
-            'success': True,
-            'oda_kodu': oda_kodu,
-            'oda_linki': oda_linki
-        })
-    except Exception as e:
-        return web.json_response({'success': False, 'error': str(e)}, status=500)
+    return ws
