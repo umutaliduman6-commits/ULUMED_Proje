@@ -18,9 +18,6 @@ RUN pip install --no-cache-dir -r requirements-video.txt
 COPY video_server.py .
 COPY index.html ./static/index.html
 
-# Copy database if exists (optional)
-COPY ulumed_uyeler.db* ./ 2>/dev/null || true
-
 # Expose port
 EXPOSE 8080
 
