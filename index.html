@@ -249,8 +249,12 @@
 
         window.onload = function() {
             const odaParam = getQueryParam('oda');
+            const adParam = getQueryParam('ad');
             if (odaParam) {
                 document.getElementById('roomCode').value = odaParam;
+            }
+            if (adParam) {
+                document.getElementById('username').value = decodeURIComponent(adParam);
             }
         };
 
