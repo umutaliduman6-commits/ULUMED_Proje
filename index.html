@@ -82,6 +82,10 @@
             margin-bottom: 20px;
         }
 
+        #remoteVideos {
+            display: contents;
+        }
+
         .video-box {
             background: rgba(30, 41, 59, 0.8);
             border-radius: 12px;
@@ -234,6 +238,7 @@
         let roomCode;
         let isMuted = false;
         let isCameraOff = false;
+        let bekleyenIceAdaylari = {};
 
         const config = {
             iceServers: [
@@ -313,7 +318,7 @@
                         updateParticipantList(data.kullanicilar);
                         break;
                     case 'user-joined':
-                        createPeerConnection(data.kullanici_id);
+                        await createPeerConnection(data.kullanici_id, true);
                         break;
                 }
             };
@@ -327,7 +332,13 @@
             };
         }
 
-        async function createPeerConnection(targetUserId) {
+        // Her katılımcı için tek bir RTCPeerConnection oluşturur.
+        // teklifGonder=true ise (odaya yeni biri girdiğinde) karşı tarafa offer gönderilir.
+        async function createPeerConnection(targetUserId, teklifGonder) {
+            if (peerConnections[targetUserId]) {
+                return peerConnections[targetUserId];
+            }
+
             const pc = new RTCPeerConnection(config);
 
             localStream.getTracks().forEach(track => {
@@ -345,65 +356,79 @@
             };
 
             pc.ontrack = function(event) {
-                const remoteVideo = document.createElement('video');
-                remoteVideo.autoplay = true;
-                remoteVideo.playsInline = true;
-                remoteVideo.srcObject = event.streams[0];
+                uzakGoruntuyuGoster(targetUserId, event.streams[0]);
+            };
 
-                const videoBox = document.createElement('div');
-                videoBox.className = 'video-box';
-                videoBox.innerHTML = `<div class="label">${targetUserId}</div>`;
-                videoBox.appendChild(remoteVideo);
-
-                document.getElementById('remoteVideos').appendChild(videoBox);
+            pc.onconnectionstatechange = function() {
+                if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+                    uzakGoruntuyuKaldir(targetUserId);
+                    delete peerConnections[targetUserId];
+                }
             };
 
             peerConnections[targetUserId] = pc;
 
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
+            if (teklifGonder) {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
 
-            ws.send(JSON.stringify({
-                tip: 'offer',
-                hedef: targetUserId,
-                offer: offer
-            }));
+                ws.send(JSON.stringify({
+                    tip: 'offer',
+                    hedef: targetUserId,
+                    offer: offer
+                }));
+            }
+
+            return pc;
+        }
+
+        function uzakGoruntuyuGoster(userId, stream) {
+            const boxId = 'remote-' + userId;
+            let box = document.getElementById(boxId);
+
+            if (!box) {
+                box = document.createElement('div');
+                box.className = 'video-box';
+                box.id = boxId;
+
+                const label = document.createElement('div');
+                label.className = 'label';
+                label.textContent = userId;
+
+                const video = document.createElement('video');
+                video.autoplay = true;
+                video.playsInline = true;
+
+                box.appendChild(video);
+                box.appendChild(label);
+                document.getElementById('remoteVideos').appendChild(box);
+            }
+
+            const video = box.querySelector('video');
+            if (video.srcObject !== stream) {
+                video.srcObject = stream;
+                video.play().catch(() => {});
+            }
+        }
+
+        function uzakGoruntuyuKaldir(userId) {
+            const box = document.getElementById('remote-' + userId);
+            if (box) {
+                box.remove();
+            }
+            delete bekleyenIceAdaylari[userId];
         }
 
         async function handleOffer(data) {
-            const pc = new RTCPeerConnection(config);
+            if (!data.gonderen) {
+                return;
+            }
 
-            localStream.getTracks().forEach(track => {
-                pc.addTrack(track, localStream);
-            });
-
-            pc.onicecandidate = function(event) {
-                if (event.candidate) {
-                    ws.send(JSON.stringify({
-                        tip: 'ice-candidate',
-                        hedef: data.gonderen,
-                        candidate: event.candidate
-                    }));
-                }
-            };
-
-            pc.ontrack = function(event) {
-                const remoteVideo = document.createElement('video');
-                remoteVideo.autoplay = true;
-                remoteVideo.playsInline = true;
-                remoteVideo.srcObject = event.streams[0];
-
-                const videoBox = document.createElement('div');
-                videoBox.className = 'video-box';
-                videoBox.innerHTML = `<div class="label">${data.gonderen}</div>`;
-                videoBox.appendChild(remoteVideo);
-
-                document.getElementById('remoteVideos').appendChild(videoBox);
-            };
-
-            peerConnections[data.gonderen] = pc;
+            const pc = await createPeerConnection(data.gonderen, false);
 
             await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+            await bekleyenAdaylariIsle(data.gonderen);
+
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
 
@@ -415,18 +440,43 @@
         }
 
         async function handleAnswer(data) {
-            if (peerConnections[data.gonderen]) {
-                await peerConnections[data.gonderen].setRemoteDescription(
-                    new RTCSessionDescription(data.answer)
-                );
+            const pc = peerConnections[data.gonderen];
+            if (pc) {
+                await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+                await bekleyenAdaylariIsle(data.gonderen);
             }
         }
 
         async function handleIceCandidate(data) {
-            if (peerConnections[data.gonderen]) {
-                await peerConnections[data.gonderen].addIceCandidate(
-                    new RTCIceCandidate(data.candidate)
-                );
+            if (!data.gonderen) {
+                return;
+            }
+
+            const pc = peerConnections[data.gonderen];
+
+            // Uzak açıklama henüz ayarlanmadıysa adayı kuyruğa al, sonra işlenir
+            if (!pc || !pc.remoteDescription || !pc.remoteDescription.type) {
+                if (!bekleyenIceAdaylari[data.gonderen]) {
+                    bekleyenIceAdaylari[data.gonderen] = [];
+                }
+                bekleyenIceAdaylari[data.gonderen].push(data.candidate);
+                return;
+            }
+
+            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        }
+
+        async function bekleyenAdaylariIsle(userId) {
+            const pc = peerConnections[userId];
+            const adaylar = bekleyenIceAdaylari[userId] || [];
+            delete bekleyenIceAdaylari[userId];
+
+            for (const aday of adaylar) {
+                try {
+                    await pc.addIceCandidate(new RTCIceCandidate(aday));
+                } catch (err) {
+                    console.error('ICE adayı eklenemedi:', err);
+                }
             }
         }
 

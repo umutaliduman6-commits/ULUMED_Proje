@@ -174,6 +174,16 @@ class VideoKonferansSunucusu:
 
         ws.kullanici_id = uye_adi
         self.oda_kullanicilari[oda_kodu].append(ws)
+
+        # Yeni katılımcıyı odadaki diğer kullanıcılara bildir.
+        # Bu mesajı alan istemciler yeni kullanıcıya WebRTC teklifi (offer) gönderir.
+        for diger_ws in self.oda_kullanicilari[oda_kodu]:
+            if diger_ws is not ws:
+                await diger_ws.send_json({
+                    'tip': 'user-joined',
+                    'kullanici_id': uye_adi
+                })
+
         await self.kullanici_listesi_gonder(oda_kodu)
 
         try:
@@ -194,6 +204,9 @@ class VideoKonferansSunucusu:
         return ws
 
     async def mesaj_ilet(self, oda_kodu, gonderen_ws, data):
+        # Gönderenin adını mesaja ekle; karşı taraf yanıtı kime göndereceğini bilsin
+        data['gonderen'] = getattr(gonderen_ws, 'kullanici_id', None)
+
         hedef_ws = None
         if 'hedef' in data:
             for ws in self.oda_kullanicilari[oda_kodu]:
@@ -203,6 +216,9 @@ class VideoKonferansSunucusu:
 
         if hedef_ws:
             await hedef_ws.send_json(data)
+        elif 'hedef' in data:
+            # Hedef kullanıcı odada yok (ayrılmış olabilir), mesajı kimseye gönderme
+            return
         else:
             for ws in self.oda_kullanicilari[oda_kodu]:
                 if ws != gonderen_ws:
