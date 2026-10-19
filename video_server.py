@@ -12,9 +12,19 @@ VERITABANI_YOLU = Path(os.getenv('DATABASE_PATH', UYGULAMA_DIZINI / "ulumed_uyel
 PORT = int(os.getenv('PORT', 8080))
 
 
+@web.middleware
+async def onbellek_engelle(request, handler):
+    # Arayüz güncellemelerinin tarayıcı/telefon önbelleğinde kalmaması için
+    # HTML ve statik dosyalara "önbelleğe alma" başlığı ekliyoruz.
+    response = await handler(request)
+    if request.path == '/' or request.path.startswith('/static'):
+        response.headers['Cache-Control'] = 'no-store, must-revalidate'
+    return response
+
+
 class VideoKonferansSunucusu:
     def __init__(self):
-        self.app = web.Application()
+        self.app = web.Application(middlewares=[onbellek_engelle])
         self.oda_kullanicilari = {}
         self.setup_routes()
         self.setup_cors()
@@ -55,6 +65,7 @@ class VideoKonferansSunucusu:
 
     def setup_routes(self):
         self.app.router.add_get('/', self.index)
+        self.app.router.add_get('/favicon.ico', self.favicon)
         self.app.router.add_get('/ws/{oda_kodu}', self.websocket_handler)
         self.app.router.add_post('/api/oda-olustur', self.oda_olustur)
         self.app.router.add_get('/api/oda/{oda_kodu}', self.oda_bilgisi)
@@ -63,6 +74,9 @@ class VideoKonferansSunucusu:
 
     async def index(self, request):
         return web.FileResponse(UYGULAMA_DIZINI / 'static' / 'index.html')
+
+    async def favicon(self, request):
+        return web.Response(status=204)
 
     async def oda_olustur(self, request):
         try:
@@ -194,43 +208,53 @@ class VideoKonferansSunucusu:
                 elif msg.type == WSMsgType.ERROR:
                     print(f'WebSocket error: {ws.exception()}')
         finally:
-            if ws in self.oda_kullanicilari[oda_kodu]:
-                self.oda_kullanicilari[oda_kodu].remove(ws)
-            await self.kullanici_listesi_gonder(oda_kodu)
+            # Oda bu sırada başka bir bağlantı tarafından silinmiş olabilir;
+            # .get() ile erişip KeyError oluşmasını engelliyoruz.
+            kullanicilar = self.oda_kullanicilari.get(oda_kodu)
+            if kullanicilar is not None:
+                if ws in kullanicilar:
+                    kullanicilar.remove(ws)
+                await self.kullanici_listesi_gonder(oda_kodu)
 
-            if not self.oda_kullanicilari[oda_kodu]:
-                del self.oda_kullanicilari[oda_kodu]
+                if not self.oda_kullanicilari.get(oda_kodu):
+                    self.oda_kullanicilari.pop(oda_kodu, None)
 
         return ws
 
     async def mesaj_ilet(self, oda_kodu, gonderen_ws, data):
         # Gönderenin adını mesaja ekle; karşı taraf yanıtı kime göndereceğini bilsin
-        data['gonderen'] = getattr(gonderen_ws, 'kullanici_id', None)
+        gonderen_id = getattr(gonderen_ws, 'kullanici_id', None)
+        data['gonderen'] = gonderen_id
+        
+        tip = data.get('tip')
+        hedef = data.get('hedef')
+        
+        print(f"Mesaj iletiliyor: Tip={tip}, Gönderen={gonderen_id}, Hedef={hedef}")
 
         hedef_ws = None
-        if 'hedef' in data:
+        if hedef:
             for ws in self.oda_kullanicilari[oda_kodu]:
-                if getattr(ws, 'kullanici_id', None) == data['hedef']:
+                if getattr(ws, 'kullanici_id', None) == hedef:
                     hedef_ws = ws
                     break
 
         if hedef_ws:
             await hedef_ws.send_json(data)
-        elif 'hedef' in data:
-            # Hedef kullanıcı odada yok (ayrılmış olabilir), mesajı kimseye gönderme
+        elif hedef:
+            print(f"Hedef bulunamadı: {hedef}")
             return
         else:
+            # Broadcast (hedef belirtilmemişse)
             for ws in self.oda_kullanicilari[oda_kodu]:
                 if ws != gonderen_ws:
                     await ws.send_json(data)
 
     async def kullanici_listesi_gonder(self, oda_kodu):
-        kullanicilar = []
-        for ws in self.oda_kullanicilari[oda_kodu]:
-            kullanicilar.append(getattr(ws, 'kullanici_id', 'Anonim'))
+        baglantilar = self.oda_kullanicilari.get(oda_kodu, [])
+        kullanicilar = [getattr(ws, 'kullanici_id', 'Anonim') for ws in baglantilar]
 
         mesaj = {'tip': 'kullanici_listesi', 'kullanicilar': kullanicilar}
-        for ws in self.oda_kullanicilari[oda_kodu]:
+        for ws in baglantilar:
             await ws.send_json(mesaj)
 
     def run(self, host='0.0.0.0', port=8080):
