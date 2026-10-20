@@ -208,12 +208,18 @@ class VideoKonferansSunucusu:
                 elif msg.type == WSMsgType.ERROR:
                     print(f'WebSocket error: {ws.exception()}')
         finally:
-            # Oda bu sırada başka bir bağlantı tarafından silinmiş olabilir;
-            # .get() ile erişip KeyError oluşmasını engelliyoruz.
             kullanicilar = self.oda_kullanicilari.get(oda_kodu)
             if kullanicilar is not None:
                 if ws in kullanicilar:
                     kullanicilar.remove(ws)
+                
+                # Ayrılan kullanıcıyı diğerlerine bildir
+                for diger_ws in kullanicilar:
+                    await diger_ws.send_json({
+                        'tip': 'user-left',
+                        'kullanici_id': uye_adi
+                    })
+                
                 await self.kullanici_listesi_gonder(oda_kodu)
 
                 if not self.oda_kullanicilari.get(oda_kodu):
